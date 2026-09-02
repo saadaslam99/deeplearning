@@ -7,58 +7,64 @@ import os
 st.set_page_config(page_title="Wearable Activity Recognition", layout="centered")
 
 st.title("🏃 Wearable Activity Recognition")
-st.write("Upload wearable sensor data (CSV) or enter readings to predict activity.")
+st.write("Classify wearable sensor time-series data using a 1D Convolutional Neural Network.")
 
-# 1. Load the Model
+CLASS_NAMES = ['Stationary', 'Walking', 'Running']
 MODEL_PATH = "wearable_activity_model.keras"
 
 @st.cache_resource
-def load_trained_model():
+def load_model():
     if os.path.exists(MODEL_PATH):
         return tf.keras.models.load_model(MODEL_PATH)
     return None
 
-model = load_trained_model()
+model = load_model()
 
 if model is None:
-    st.error(f"Model file '{MODEL_PATH}' was not found in the repository. Please ensure the .keras file is committed and pushed.")
+    st.error(f"Model file '{MODEL_PATH}' not found. Please ensure the model is pushed to the repository.")
 else:
     st.success("Model loaded successfully!")
 
-    # Update these class names to match your dataset classes
-    CLASS_NAMES = ["Walking", "Jogging", "Sitting", "Standing", "Upstairs", "Downstairs"]
-
-    # 2. File Upload UI
-    uploaded_file = st.file_uploader("Choose a sensor reading CSV file", type=["csv"])
+    uploaded_file = st.file_uploader("Upload a sensor CSV (e.g. sample_running.csv)", type=["csv"])
 
     if uploaded_file is not None:
         try:
             df = pd.read_csv(uploaded_file)
-            st.write("### Preview of Uploaded Data:")
+            st.write("### Data Preview")
             st.dataframe(df.head())
 
-            if st.button("Classify Activity"):
-                # Preprocessing placeholder: convert dataframe to model input shape
-                # Adjust (1, -1) / reshape to match your model's expected input dimension
-                sensor_data = df.select_dtypes(include=[np.number]).to_numpy()
-                
-                # Reshape to batch format expected by CNN
-                # e.g., if model expects (batch_size, timesteps, features):
-                input_tensor = np.expand_dims(sensor_data, axis=0)
+            # Extract 100 time-step features (t000 to t099 or numerical columns)
+            time_cols = [c for c in df.columns if c.startswith('t')]
+            if len(time_cols) == 100:
+                features = df[time_cols].iloc[0].to_numpy()
+            else:
+                numeric_df = df.select_dtypes(include=[np.number])
+                features = numeric_df.to_numpy().flatten()[:100]
 
+            if len(features) < 100:
+                st.error(f"Expected at least 100 time-series data points, but found {len(features)}.")
+            else:
+                # Plot the sensor signal
+                st.write("### Sensor Signal (100 timesteps)")
+                st.line_chart(features)
+
+                # Prepare input: (1, 100, 1)
+                input_tensor = features.reshape(1, 100, 1).astype(np.float32)
+
+                # Run inference
                 predictions = model.predict(input_tensor)[0]
                 top_idx = int(np.argmax(predictions))
-                predicted_class = CLASS_NAMES[top_idx] if top_idx < len(CLASS_NAMES) else f"Class {top_idx}"
+                predicted_activity = CLASS_NAMES[top_idx]
+                confidence = predictions[top_idx] * 100
 
-                st.subheader(f"Prediction: **{predicted_class}**")
-                st.write(f"Confidence: `{predictions[top_idx] * 100:.2f}%`")
-                
-                st.write("#### Probability Distribution:")
-                chart_data = pd.DataFrame({
-                    "Activity": CLASS_NAMES[:len(predictions)],
+                st.subheader(f"Prediction: **{predicted_activity}** ({confidence:.1f}% confidence)")
+
+                # Probability bar chart
+                prob_df = pd.DataFrame({
+                    "Activity": CLASS_NAMES,
                     "Probability": predictions
                 })
-                st.bar_chart(chart_data.set_index("Activity"))
+                st.bar_chart(prob_df.set_index("Activity"))
 
         except Exception as e:
-            st.error(f"Error processing file: {e}")
+            st.error(f"Error reading file: {e}")
